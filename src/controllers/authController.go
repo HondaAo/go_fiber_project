@@ -4,10 +4,9 @@ import (
 	"ambassador/src/database"
 	"ambassador/src/middlewares"
 	"ambassador/src/model"
-	"strconv"
+	"strings"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -28,7 +27,7 @@ func Register(c *fiber.Ctx) error {
 		Firstname:    data["first_name"],
 		Lastname:     data["last_name"],
 		Email:        data["email"],
-		IsAmbassador: false,
+		IsAmbassador: strings.Contains(c.Path(), "/api/ambassador"),
 	}
 
 	user.SetPassword(data["password"])
@@ -60,11 +59,25 @@ func Login(c *fiber.Ctx) error {
 			"message": "Password is wrong.",
 		})
 	}
-	payload := jwt.StandardClaims{
-		Subject:   strconv.Itoa(int(user.Id)),
-		ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
+
+	IsAmbassador := strings.Contains(c.Path(), "/api/ambassador")
+
+	var scope string
+
+	if IsAmbassador {
+		scope = "ambassador"
+	} else {
+		scope = "admin"
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, payload).SignedString([]byte("secret"))
+
+	if !IsAmbassador && user.IsAmbassador {
+		c.Status(fiber.StatusBadRequest)
+		return c.JSON(fiber.Map{
+			"message": "Invalid Credentials.",
+		})
+	}
+
+	token, err := middlewares.GenerateJWT(user.Id, scope)
 
 	if err != nil {
 		c.Status(fiber.StatusBadRequest)
@@ -93,6 +106,12 @@ func User(c *fiber.Ctx) error {
 	var user model.User
 
 	database.DB.Where("id = ?", id).First(&user)
+
+	if strings.Contains(c.Path(), "/api/ambassador") {
+		ambassador := model.Ambassador(user)
+		ambassador.CalculateRevenue(database.DB)
+		return c.JSON(ambassador)
+	}
 
 	return c.JSON(user)
 }
